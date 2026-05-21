@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BMW Racing – Hard Mode</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#111;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;min-height:100vh;font-family:Arial,sans-serif;padding:1.5rem 0}
+#hud{display:flex;gap:1.5rem;margin-bottom:.75rem;font-size:13px;color:#aaa}
+#hud span{font-weight:600;color:#fff}
+#roadWrap{position:relative;width:300px;height:480px;border-radius:12px;overflow:hidden;border:1px solid #333}
+#roadCanvas{position:absolute;inset:0}
+#overlay{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.75rem;background:rgba(0,0,0,0.65);border-radius:12px}
+#overlay h2{color:#fff;font-size:22px;font-weight:500}
+#overlay p{color:rgba(255,255,255,0.65);font-size:13px;text-align:center;padding:0 1rem}
+#overlay .sub{font-size:12px;color:rgba(255,255,255,0.4)}
+#btnStart{padding:8px 24px;font-size:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.3);background:rgba(255,255,255,0.1);color:#fff;cursor:pointer}
+#btnStart:hover{background:rgba(255,255,255,0.2)}
+#dpad{display:flex;gap:2rem;margin-top:.75rem}
+#dpad button{width:52px;height:52px;font-size:20px;border-radius:8px;border:1px solid #444;background:#222;color:#fff;cursor:pointer;user-select:none;-webkit-user-select:none}
+#dpad button:active{transform:scale(0.93);background:#333}
+#lvlBadge{position:absolute;top:8px;right:8px;font-size:11px;font-weight:600;padding:3px 8px;border-radius:20px;background:rgba(255,255,255,0.12);color:#fff;letter-spacing:.5px;display:none}
+</style>
+</head>
+<body>
+
+<div id="hud">Score: <span id="sc">0</span>&nbsp; Best: <span id="hi">0</span>&nbsp; Speed: <span id="spd">—</span></div>
+<div id="roadWrap">
+  <canvas id="roadCanvas" width="300" height="480"></canvas>
+  <div id="lvlBadge">LVL 1</div>
+  <div id="overlay">
+    <h2>BMW Racing</h2>
+    <p>Harder, faster, deadlier.<br>Survive as long as you can.</p>
+    <button id="btnStart">Start</button>
+    <span class="sub">Arrow keys or buttons below</span>
+  </div>
+</div>
+<div id="dpad">
+  <button id="btnL">&#8592;</button>
+  <button id="btnR">&#8594;</button>
+</div>
+
+<script>
+const canvas=document.getElementById('roadCanvas'),ctx=canvas.getContext('2d');
+const W=300,H=480,LANES=[45,128,211];
+const lvlBadge=document.getElementById('lvlBadge');
+let state='idle',score=0,best=parseInt(localStorage.getItem('bmwBest2')||'0'),
+    speed=5,playerX=128,enemies=[],lineOff=0,frameId,
+    spawnTimer=0,spawnInt=75,frame=0,shake=0,flashAlpha=0;
+document.getElementById('hi').textContent=best;
+
+const keys={};
+document.addEventListener('keydown',e=>{keys[e.key]=true;if(['ArrowLeft','ArrowRight',' '].includes(e.key))e.preventDefault()});
+document.addEventListener('keyup',e=>keys[e.key]=false);
+const btnL=document.getElementById('btnL'),btnR=document.getElementById('btnR');
+btnL.addEventListener('pointerdown',()=>keys['ArrowLeft']=true);
+btnL.addEventListener('pointerup',()=>keys['ArrowLeft']=false);
+btnL.addEventListener('pointercancel',()=>keys['ArrowLeft']=false);
+btnR.addEventListener('pointerdown',()=>keys['ArrowRight']=true);
+btnR.addEventListener('pointerup',()=>keys['ArrowRight']=false);
+btnR.addEventListener('pointercancel',()=>keys['ArrowRight']=false);
+
+function drawRoad(sx,sy){
+  ctx.save();if(shake>0){ctx.translate(sx,sy);}
+  ctx.fillStyle='#1e1e1e';ctx.fillRect(0,0,W,H);
+  const alpha=Math.min((speed-5)/15,0.6);
+  if(alpha>0){
+    const grad=ctx.createLinearGradient(0,0,0,H);
+    grad.addColorStop(0,'rgba(255,80,80,0)');
+    grad.addColorStop(0.5,`rgba(255,80,80,${alpha})`);
+    grad.addColorStop(1,'rgba(255,80,80,0)');
+    ctx.fillStyle=grad;ctx.fillRect(0,0,12,H);ctx.fillRect(288,0,12,H);
+  } else {
+    ctx.fillStyle='#333';ctx.fillRect(0,0,10,H);ctx.fillRect(290,0,10,H);
+  }
+  ctx.strokeStyle='rgba(255,255,255,0.4)';ctx.setLineDash([36,28]);ctx.lineWidth=2.5;
+  ctx.lineDashOffset=-lineOff;
+  [100,200].forEach(x=>{ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke();});
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+function drawCar(x,y,body,win,headlights){
+  const w=40,h=68;
+  ctx.save();ctx.translate(x+w/2,y+h/2);
+  if(!headlights&&speed>12){ctx.shadowColor='rgba(255,50,50,0.6)';ctx.shadowBlur=14;}
+  ctx.fillStyle=body;ctx.beginPath();ctx.roundRect(-w/2,-h/2,w,h,8);ctx.fill();
+  ctx.shadowBlur=0;
+  ctx.fillStyle=win;
+  ctx.beginPath();ctx.roundRect(-13,-h/2+10,26,16,3);ctx.fill();
+  ctx.beginPath();ctx.roundRect(-13,-h/2+32,26,16,3);ctx.fill();
+  ctx.fillStyle='#111';
+  [[-16,h/2-9],[8,h/2-9],[-16,-h/2+3],[8,-h/2+3]].forEach(([tx,ty])=>{
+    ctx.beginPath();ctx.ellipse(tx+4,ty,6,4.5,0,0,Math.PI*2);ctx.fill();
+  });
+  if(headlights){
+    ctx.fillStyle='rgba(255,230,80,0.95)';
+    ctx.beginPath();ctx.ellipse(-11,-h/2-3,5,3.5,0,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(11,-h/2-3,5,3.5,0,0,Math.PI*2);ctx.fill();
+  } else {
+    ctx.fillStyle='rgba(255,60,60,0.9)';
+    ctx.beginPath();ctx.ellipse(-11,h/2+3,5,3,0,0,Math.PI*2);ctx.fill();
+    ctx.beginPath();ctx.ellipse(11,h/2+3,5,3,0,0,Math.PI*2);ctx.fill();
+  }
+  ctx.restore();
+}
+
+const TIERS=[
+  {minScore:0,  speed:5,  spawnInt:75, label:'LVL 1', color:'#555555'},
+  {minScore:8,  speed:7,  spawnInt:62, label:'LVL 2', color:'#446688'},
+  {minScore:18, speed:9,  spawnInt:50, label:'LVL 3', color:'#558844'},
+  {minScore:32, speed:12, spawnInt:40, label:'LVL 4', color:'#997733'},
+  {minScore:50, speed:15, spawnInt:30, label:'LVL 5', color:'#993333'},
+  {minScore:75, speed:18, spawnInt:22, label:'⚡ MAX', color:'#cc3333'},
+];
+
+function getTier(s){
+  let t=TIERS[0];
+  for(const d of TIERS)if(s>=d.minScore)t=d;
+  return t;
+}
+
+function spawnEnemy(){
+  const t=getTier(score);
+  const count=(t.minScore>=50&&Math.random()<0.35)?2:1;
+  const usedLanes=[];
+  for(let i=0;i<count;i++){
+    const avail=LANES.filter(l=>!usedLanes.includes(l)&&!enemies.some(e=>e.x===l&&e.y>-90&&e.y<30));
+    if(!avail.length)break;
+    const lane=avail[Math.floor(Math.random()*avail.length)];
+    usedLanes.push(lane);
+    const fast=(t.minScore>=32&&Math.random()<0.4);
+    enemies.push({x:lane,y:-80,fast});
+  }
+}
+
+function loop(){
+  if(state!=='running')return;
+  frame++;
+  const tier=getTier(score);
+  speed=tier.speed+(frame/800);
+  spawnInt=tier.spawnInt;
+  lineOff=(lineOff+speed*1.1)%64;
+  if(shake>0)shake--;
+  if(flashAlpha>0)flashAlpha-=0.05;
+
+  const ps=8+Math.min((speed-5)*0.3,4);
+  if(keys['ArrowLeft'])playerX=Math.max(20,playerX-ps);
+  if(keys['ArrowRight'])playerX=Math.min(240,playerX+ps);
+
+  spawnTimer++;
+  if(spawnTimer>=spawnInt){spawnTimer=0;spawnEnemy();}
+
+  enemies.forEach(e=>{e.y+=e.fast?speed*1.55:speed;});
+
+  enemies=enemies.filter(e=>{
+    if(e.y>H+90){
+      score++;
+      document.getElementById('sc').textContent=score;
+      if(score>best){best=score;document.getElementById('hi').textContent=best;localStorage.setItem('bmwBest2',best);}
+      const t2=getTier(score);
+      lvlBadge.textContent=t2.label;lvlBadge.style.background=t2.color+'aa';
+      document.getElementById('spd').textContent=speed.toFixed(1);
+      return false;
+    }
+    return true;
+  });
+
+  const px=playerX,py=H-150;
+  for(const e of enemies){
+    if(px<e.x+36&&px+40>e.x&&py<e.y+68&&py+68>e.y){
+      endGame();return;
+    }
+  }
+
+  const sx=(shake>0)?(Math.random()*8-4):0,sy=(shake>0)?(Math.random()*4-2):0;
+  drawRoad(sx,sy);
+
+  enemies.forEach(e=>{
+    const col=e.fast?'#991111':'#7a1818';
+    const win=e.fast?'rgba(255,120,120,0.8)':'rgba(200,80,80,0.7)';
+    drawCar(e.x,e.y,col,win,false);
+  });
+
+  drawCar(playerX,py,'#0f2d5e','rgba(70,140,255,0.8)',true);
+
+  const closest=enemies.reduce((mn,e)=>{
+    const d=Math.abs(e.x-playerX),dy=Math.abs(e.y-py);
+    return(d<50&&dy<120)?Math.min(mn,d):mn;
+  },9999);
+  if(closest<30){ctx.fillStyle='rgba(255,255,0,0.07)';ctx.fillRect(0,0,W,H);}
+  if(flashAlpha>0){ctx.fillStyle=`rgba(255,40,40,${flashAlpha})`;ctx.fillRect(0,0,W,H);}
+
+  frameId=requestAnimationFrame(loop);
+}
+
+function startGame(){
+  state='running';score=0;speed=5;playerX=128;enemies=[];lineOff=0;
+  spawnTimer=0;spawnInt=75;frame=0;shake=0;flashAlpha=0;
+  document.getElementById('sc').textContent=0;
+  document.getElementById('spd').textContent='5.0';
+  lvlBadge.style.display='block';lvlBadge.textContent='LVL 1';lvlBadge.style.background='#555555aa';
+  document.getElementById('overlay').style.display='none';
+  cancelAnimationFrame(frameId);frameId=requestAnimationFrame(loop);
+}
+
+function endGame(){
+  state='over';cancelAnimationFrame(frameId);
+  shake=20;flashAlpha=0.7;
+  setTimeout(()=>{
+    const ol=document.getElementById('overlay');ol.style.display='flex';
+    const tier=getTier(score);
+    ol.innerHTML=`<h2 style="color:#fff">Crashed!</h2>
+    <p style="color:rgba(255,255,255,0.7)">Score: ${score} &nbsp;|&nbsp; Best: ${best}<br>
+    <span style="font-size:12px;opacity:.6">Reached ${tier.label}</span></p>
+    <button id="btnStart" style="padding:8px 24px;font-size:14px;border-radius:8px;border:1px solid rgba(255,255,255,0.3);background:rgba(255,255,255,0.1);color:#fff;cursor:pointer">Try again</button>`;
+    document.getElementById('btnStart').onclick=startGame;
+  },400);
+}
+
+document.getElementById('btnStart').onclick=startGame;
+drawRoad(0,0);
+drawCar(128,H-150,'#0f2d5e','rgba(70,140,255,0.8)',true);
+</script>
+</body>
+</html>
